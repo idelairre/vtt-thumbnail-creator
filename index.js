@@ -24,10 +24,16 @@ const argv = yargs(hideBin(process.argv))
         type: 'number',
         default: 320
     })
+    .option('columns', {
+        alias: 'c',
+        description: 'The number of columns in the thumbnail sheet',
+        type: 'number',
+        default: 5
+    })
     .help()
     .argv;
 
-const columns = 5;
+const columns = argv.columns;
 const inputVideo = argv.input;
 const fps = argv.fps;
 const width = argv.width;
