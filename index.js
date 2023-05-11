@@ -2,14 +2,35 @@ const ffmpeg = require('fluent-ffmpeg');
 const sharp = require('sharp');
 const fs = require('fs');
 const path = require('path');
+const yargs = require('yargs/yargs');
+const { hideBin } = require('yargs/helpers');
+
+const argv = yargs(hideBin(process.argv))
+    .command('$0 <input>', 'the main command', (yargs) => {
+        yargs.positional('input', {
+            describe: 'The input video file',
+            type: 'string'
+        })
+    })
+    .option('fps', {
+        alias: 'f',
+        description: 'The frame rate to extract thumbnails',
+        type: 'number',
+        default: 1
+    })
+    .option('width', {
+        alias: 'w',
+        description: 'The width of the thumbnails',
+        type: 'number',
+        default: 320
+    })
+    .help()
+    .argv;
 
 const columns = 5;
-const inputVideo = process.argv[2];
-
-if (!inputVideo) {
-    console.error('Please provide an input video');
-    process.exit(1);
-}
+const inputVideo = argv.input;
+const fps = argv.fps;
+const width = argv.width;
 
 const videoName = path.basename(inputVideo, path.extname(inputVideo));
 const outputFolder = path.join(__dirname, videoName);
@@ -20,7 +41,7 @@ if (!fs.existsSync(framesDir)) {
 }
 
 ffmpeg(inputVideo)
-    .outputOptions('-vf fps=1/1') // NOTE: change this to something more reasonable for longer videos
+    .outputOptions(`-vf fps=${fps}`)
     .output(path.join(framesDir, 'frame_%04d.png'))
     .on('end', async () => {
         console.log('Frames extracted');
@@ -34,30 +55,32 @@ ffmpeg(inputVideo)
             }
 
             const rows = Math.ceil(files.length / columns);
-            const imagePromises = files.map(file => sharp(path.join(framesDir, file)).resize(320, 240).toBuffer());
+            const imagePromises = files.map(file => sharp(path.join(framesDir, file)).resize(width).toBuffer());
 
             try {
+                // probably don't have to do this...
                 const images = await Promise.all(imagePromises);
+                const imageHeights = images.map((image) => sharp(image).metadata().then((metadata) => metadata.height));
+                const imageHeightsResolved = await Promise.all(imageHeights);
+                const height = Math.max(...imageHeightsResolved);
 
-                // Join all the images together into a sprite sheet
                 await sharp({
                     create: {
-                        width: 320 * columns,
-                        height: 240 * rows,
+                        width: width * columns,
+                        height: height * rows,
                         channels: 4,
                         background: { r: 0, g: 0, b: 0, alpha: 0 }
                     }
                 })
                     .composite(images.map((image, i) => ({
                         input: image,
-                        top: Math.floor(i / columns) * 240,
-                        left: (i % columns) * 320
+                        top: Math.floor(i / columns) * height,
+                        left: (i % columns) * width
                     })))
                     .toFile(path.join(outputFolder, `${videoName}-sheet.jpg`));
 
                 console.log('Tile image created successfully');
 
-                // Create a VTT file
                 const vttFile = fs.createWriteStream(path.join(outputFolder, `${videoName}-sheet.vtt`));
                 vttFile.write('WEBVTT\n\n');
 
@@ -65,12 +88,12 @@ ffmpeg(inputVideo)
                     const startTime = new Date(i * 1000).toISOString().substr(11, 12);
                     const endTime = new Date((i + 1) * 1000).toISOString().substr(11, 12);
                     const position = {
-                        x: (i % columns) * 320,
-                        y: Math.floor(i / columns) * 240
+                        x: (i % columns) * width,
+                        y: Math.floor(i / columns) * height
                     };
 
                     vttFile.write(`${startTime} --> ${endTime}\n`);
-                    vttFile.write(`/${videoName}-sheet.jpg#xywh=${position.x},${position.y},320,240\n\n`);
+                    vttFile.write(`/${videoName}-sheet.jpg#xywh=${position.x},${position.y},${width},${height}\n\n`);
                 }
 
                 vttFile.end();
@@ -78,7 +101,6 @@ ffmpeg(inputVideo)
             } catch (err) {
                 console.log(`Error creating tile image: ${err.message}`);
             } finally {
-                // Remove the frames directory
                 fs.rmSync(framesDir, { recursive: true });
             }
         });
